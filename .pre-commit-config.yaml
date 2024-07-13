@@ -1,0 +1,54 @@
+---
+repos:
+    -   repo: https://github.com/psf/black
+        rev: 22.10.0
+        hooks:
+        -   id: black
+            args: [--safe]
+
+    -   repo: https://github.com/sqlfluff/sqlfluff
+        rev: 3.0.3
+        hooks:
+        -   id: sqlfluff-fix
+            args: ['--dialect=bigquery', '-–ignore=parsing,templating',  './src/']
+
+    -   repo: https://github.com/pre-commit/pre-commit-hooks
+        rev: v3.2.0
+        hooks:
+        -   id: trailing-whitespace
+        -   id: end-of-file-fixer
+        -   id: check-yaml
+        -   id: check-added-large-files
+        -   id: debug-statements
+            language_version: python3
+
+    -   repo: https://github.com/PyCQA/flake8
+        rev: 3.9.2
+        hooks:
+        -   id: flake8
+            language_version: python3
+
+    -   repo: https://github.com/asottile/reorder_python_imports
+        rev: v3.12.0
+        hooks:
+        -   id: reorder-python-imports
+            args: ['--application-directories=.:src', '--py36-plus']
+
+    -   repo: https://github.com/asottile/pyupgrade
+        rev: v3.15.2
+        hooks:
+        -   id: pyupgrade
+            args: [--py36-plus]
+
+    # Test if the variable typing is correct. (Variable typing is when you say:
+    # def is_larger(nr: int) -> bool: instead of def is_larger(nr). It makes
+    # it explicit what type of input and output a function has.
+    -   repo: https://github.com/pre-commit/mirrors-mypy
+        rev: v1.10.0
+        hooks:
+        -   id: mypy
+            verbose: true
+            args: [--show-error-codes, --ignore-missing-imports]
+            additional_dependencies: ['types-requests']
+
+            # files: ^src/

@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "ingestion-framework"
+version = "0.1.0"
+description = ""
+authors = ["RaymondOnn <raymondonn@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+dlt = {extras = ["duckdb"], version = "^0.4.12"}
+streamlit = "^1.35.0"
+duckdb = ">=0.6.1"
+
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.4"
+pre-commit = "^3.7.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true

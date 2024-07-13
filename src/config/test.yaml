@@ -1,0 +1,20 @@
+locations:
+    source_folder:
+        type: directory
+        directory_path: /Users/main/Documents/Code/Github/ingestion_framework
+
+    working_folder:
+        type: snowflake_landing_zone
+        directory_path: /Users/main/Documents/Code/Github/ingestion_framework
+
+workflow:
+    steps:
+        transport:
+            from: source_folder
+            to: working_folder
+        process:
+            from: working_folder
+            to: source_folder
+            from_file_format: csv
+            schame:
+                messageID: id

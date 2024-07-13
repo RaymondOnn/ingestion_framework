@@ -1,0 +1,4 @@
+- Validate Yaml Configs
+- Schema Contracts
+- Incremental Loading / Checkpointing
+- Schema Definition for normalize stage
