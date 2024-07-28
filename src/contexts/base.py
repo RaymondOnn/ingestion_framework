@@ -23,21 +23,21 @@ def get_environment() -> str:
             or 'd'.
 
     """
-    hostname = socket.gethostname().lower().split(".")[0]
-    environment_mapping = {
-        "p": "prd",
-        "c": "ppr",
-        "u": "uat",
-        "d": "dev",
-    }
-    environment = environment_mapping.get(hostname[-1], None)
-    if environment is None:
-        raise OSError(
-            f"Unknown environment: {hostname}. \
-            Host name must end with 'p/c/u/d'"
-        )
-    return environment
-    # return "test"
+    # hostname = socket.gethostname().lower().split(".")[0]
+    # environment_mapping = {
+    #     "p": "prd",
+    #     "c": "ppr",
+    #     "u": "uat",
+    #     "d": "dev",
+    # }
+    # environment = environment_mapping.get(hostname[-1], None)
+    # if environment is None:
+    #     raise OSError(
+    #         f"Unknown environment: {hostname}. \
+    #         Host name must end with 'p/c/u/d'"
+    #     )
+    # return environment
+    return "test"
 
 
 DEFAULT_CONFIG_FILE_PATH = Path("src/config") / f"{get_environment()}.yaml"

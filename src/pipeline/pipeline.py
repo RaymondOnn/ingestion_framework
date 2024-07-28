@@ -1,11 +1,13 @@
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from typing import Callable
 from typing import Optional
-from typing import Protocol
-from typing import runtime_checkable
 
-from src.contexts.pipeline import ExecutionContext
+
+from src.actions.base import ActionFactory
+from src.contexts.pipeline import AppContext, ExecutionContext, Node
 from src.contexts.pipeline import JobReport
 from src.contexts.pipeline import PipelineContext
 from src.pipeline.errors import ErrorHandler
@@ -20,152 +22,225 @@ class PipelineError(Exception):
     pass
 
 
-@runtime_checkable
-class PipelineStep(Protocol):
-    """Protocol for PipelineStep"""
-
-    def __call__(self, context: dict[str, Any], next_step: TNextStep) -> None:
-        """
-        Executes the pipeline step.
-
-        Args:
-            context (dict[str, Any]): The context object containing the
-                information needed for the step.
-            next_step (Callable[[Any], None]): The function to call the next
-                step in the pipeline.
-
-        Returns:
-            None: This function does not return anything.
-        """
-        ...
-
 
 class PipelineCursor(ExecutionContext):
-    """PipelineCursor to execute steps in pipeline"""
-
-    def __init__(
-        self,
-        steps: list[PipelineStep],
-        error_handler: ErrorHandler,
-    ) -> None:
-        """
-        Initialize PipelineCursor.
-
-        Args:
-            steps (list[PipelineStep]): List of steps to execute.
-            error_handler (ErrorHandler): ErrorHandler to handle errors.
-        """
+    def __init__(self, dag_graph:dict, task_dependencies: dict, error_handler) -> None:
         super().__init__()
-        self.queue: list[PipelineStep] = steps
-        self.error_handler: ErrorHandler = error_handler
+        self.graph = dag_graph
+        self.deps = task_dependencies
+        self.error_handler = error_handler
+    
+    def get_node(self, step_name:str):
+        context = self.steps.get(step_name)
+        context.update({"name": step_name})
+        return Node(name=step_name, context=context)
+    
+    def execute(self, executor: ThreadPoolExecutor, step_name:str, partition_value: str):
+        node = self.get_node(step_name)
+        action_name = node.context.get('uses', None)
 
-    def __call__(self, context: dict) -> None:
+        if action_name is None:
+            raise TypeError(f"Action '{action_name}' does not exist in the registry")
+
+        action = ActionFactory.setup_action(action_name)
+        params = node.context.get('params', {})
+        params.update({
+                'partition_value': partition_value,
+                'name': step_name,
+            })
+
+        if params:
+            return executor.submit(action, **params)
+        else:
+            return executor.submit(action)
+
+
+    def __call__(self, partition_value:str) -> list[int]:
         """
-        Execute next step in pipeline.
-
-        Args:
-            context (Context): Context object.
-        """
-        if not self.queue:
-            return
-
-        # If outputs are not in context, create them
-        if "outputs" not in list(context.keys()):
-            context = self.__make_step_context(context)
-
-        current_task = self.queue[0]
-        next_step = PipelineCursor(self.queue[1:], self.error_handler)
-
-        try:
-            current_task(context, next_step)
-        except Exception as error:
-            self.error_handler(error, context, next_step)
-
-    def __make_step_context(self, context: dict) -> dict:
-        """
-        Create step context.
-
-        Args:
-            context (dict): Context object.
+        Performs a topological sort of the graph using Khan's algorithm.
+        This function uses parallelization to speed up the execution time by executing independent nodes concurrently.
 
         Returns:
-            dict: Updated context object.
+        --------
+        List[int]:
+            A list of nodes in topological order.
         """
-        context["outputs"] = {}
-        for task_name in self.config.keys():
-            context[task_name] = {}
-            context[task_name] = self.config.get(task_name)
-        return context
+        deps = self.deps.copy()
+        q = []
+
+        with ThreadPoolExecutor() as executor:
+
+            # Add all nodes with in-degree 0 to the queue
+            for step_name in self.graph:
+                if deps[step_name] == 0:
+
+                    # Add a tuple with node and its execution to the queue
+                    q.append((step_name, self.execute(executor, step_name, partition_value)))
+
+            # Initialize an empty list to hold the sorted nodes
+            result = []
+
+            # Keep sorting until the queue is empty
+            while q:
+                for step_name, execution in q:
+            
+                    # If the execution is not done, continue the loop
+                    if not execution.done():
+                        continue
+            
+                    # Remove the executed node from the queue and add it to the result
+                    q.remove((step_name, execution))
+                    result.append(step_name)
+
+                    # Decrement the in-degree of all adjacent nodes
+                    for neighbor in self.graph[step_name]:
+                        deps[neighbor] -= 1
+
+                        # Add the neighbor to the queue if its in-degree is 0
+                        if deps[neighbor] == 0:
+                            q.append((neighbor, self.execute(executor, neighbor, partition_value)))
+        return result
 
 
-# def _default_error_handler(
-# error: Exception,
-# context: Context,
-# next_step: Callable[[Any], None]
-# ) -> None:
-#     """
-#     Default error handler that raises error.
-
-#     Args:
-#         error (Exception): Error to raise.
-#         context (Context): Context object.
-#         next_step (Callable[[Any], None]): Callable to call next step
-#           in pipeline.
-#     """
-#     raise error
-
-
-class Pipeline(PipelineContext):
+class Pipeline(AppContext):
     """Pipeline to execute steps in pipeline"""
 
-    def __init__(self, *steps: PipelineStep) -> None:
+    def __init__(self) -> None:
         """
-        Initialize Pipeline.
-
-        Args:
-            *steps (PipelineStep): Steps to execute.
+        Initializes a new empty graph.
         """
         super().__init__()
-        self.queue: list[PipelineStep] = [step for step in steps]
+        self.graph: dict = defaultdict(list)
+        self.deps: dict = defaultdict(int)
+    
+        
+    def generate_dag(self) -> Self:
+        
+        for name, context in self.execution_context.steps.items():
+                self.add(name, context.get('depends_on', None))
+        return self 
 
-    def append(self, step: PipelineStep) -> None:
+    def add(self, step: str, depends_on: Optional[str] = None) -> bool:
         """
-        Append step to pipeline.
-
-        Args:
-            step (PipelineStep): Step to append.
+        Adds a directed edge from node u to node v.
+        
+        Parameters:
+        -----------
+        u: int
+            The starting node of the edge.
+        v: int
+            The ending node of the edge.
+        
+        Returns:
+        --------
+        bool
+            True if the edge is added successfully, False if the edge would create a cycle.
         """
-        self.queue.append(step)
+        deps = self.graph[step]
+        print(step, deps)
+        if depends_on is None:
+            return True
+        
+        if depends_on == step or step in self.graph[depends_on]:
+            return False  # Edge already exists or creates a cycle
+        
+        # Temporarily add the edge to detect cycles
+        self.graph[depends_on].append(step)
+        cycle_exists = self.detect_cycle()
+        if cycle_exists:
+            # If a cycle is created, remove the edge and return False
+            self.graph[depends_on].remove(step)
+            return False
+        
+        # If no cycle is created, add the edge and update in-degree
+        self.graph[depends_on].append(step)
+        self.deps[step] += 1
+        return True
+    
+    def detect_cycle(self) -> bool:
+        """
+        Detects cycles in the graph using a depth-first search algorithm.
 
+        Returns:
+        --------
+        bool
+            True if a cycle exists, False otherwise.
+        """
+        visited = set()
+
+        def dfs(node, stack=None):
+            stack = set() if stack is None else stack
+
+            visited.add(node)
+            stack.add(node)
+
+            for neighbor in self.graph[node]:
+                if neighbor not in visited:
+                    if dfs(neighbor, stack):
+                        return True
+                elif neighbor in stack:
+                    return True
+
+            stack.remove(node)
+            return False
+
+        for node in list(self.graph):
+            if node not in visited:
+                if dfs(node):
+                    return True
+
+        return False
+    
     def run(
-        self,
-        partition_value: str,
-        error_handler: Optional[ErrorHandler] = None,
+        self, 
+        partition_value: str, 
+        error_handler: Optional[ErrorHandler] = None
     ) -> None:
-        """
-        Execute steps in pipeline.
-
-        Args:
-            partition_value (str): Partition value.
-            error_handler (Optional[ErrorHandler]): ErrorHandler to handle
-                errors (default: SimpleErrorHandler).
-        """
-        job_report = self._start_job_report()
-        # self.current_work_dir = self.work_dir / "partition_value"
-        # self._init_work_dir(self.current_work_dir)
-        self.declare(partition_value, job_report)
-
-        # Execute steps here
+        self.declare(partition_value, self._start_job_report())
+        
         execute = PipelineCursor(
-            self.queue,
+            self.graph, 
+            self.deps, 
             error_handler or SimpleErrorHandler(),
         )
-        execute(
-            {
-                "partition_value": partition_value,
-                "timestamp_format": self.ts_fmt,
-            }
-        )
+        execute(partition_value)
+    
+    def topological_sort(self) -> list[int]:
+        """
+        Performs a topological sort of the graph using Khan's algorithm.
+        
+        Returns:
+        --------
+        List[int]:
+            A list of nodes in topological order.
+        """
+        result = []
+        q: deque = deque()
+        
+        # Add all nodes with in-degree 0 to the queue
+        for node in self.graph.keys():
+            if self.deps[node] == 0:
+                q.append(node)
+        
+        while q:
+            # Remove a node from the queue and add it to the result
+            node = q.popleft()
+            result.append(node)
+            
+            # Decrement the in-degree of all adjacent nodes
+            for neighbor in self.graph[node]:
+                self.deps[neighbor] -= 1
+                
+                # Add the neighbor to the queue if its in-degree is 0
+                if self.deps[neighbor] == 0:
+                    q.append(neighbor)
+                    
+        # Check if there was a cycle in the graph
+        if len(result) != len(self.graph):
+            raise ValueError("Graph contains a cycle")
+            
+        return result
+    
 
     def __len__(self) -> int:
         """
@@ -174,16 +249,7 @@ class Pipeline(PipelineContext):
         Returns:
             int: Number of steps.
         """
-        return len(self.queue)
-
-    def _init_work_dir(self, work_dir: Path) -> None:
-        """
-        Initialize work directory.
-
-        Args:
-            work_dir (Path): Work directory.
-        """
-        work_dir.mkdir(parents=True, exist_ok=True)
+        return len(self.graph.keys())
 
     def _start_job_report(self) -> JobReport:
         """
@@ -206,7 +272,7 @@ class Pipeline(PipelineContext):
         print("Configs initialized, starting ingestion")
         print(
             f"Ingestion timestamp: \
-            {job_report.start_ts.strftime(self.ts_fmt)}"
+            {job_report.start_ts.strftime(self.pipeline_context.ts_fmt)}"
         )
         print("Partition Value: ", partition_value)
         # print(f"Log Path: {self.work_dir / self.log_file_name}")
@@ -236,3 +302,4 @@ class Pipeline(PipelineContext):
         print(f"Exit code: {job_report.exit_code}")
         print(f"Log Path: {self.work_dir / self.log_file_name}")
         print("*" * 100)
+

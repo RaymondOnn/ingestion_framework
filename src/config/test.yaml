@@ -1,3 +1,5 @@
+name: test pipeline
+timestamp_format: "%Y-%m-%d %H:%M:%S"
 locations:
     source_folder:
         type: directory
@@ -7,14 +9,17 @@ locations:
         type: snowflake_landing_zone
         directory_path: /Users/main/Documents/Code/Github/ingestion_framework
 
-workflow:
-    steps:
-        transport:
-            from: source_folder
-            to: working_folder
-        process:
-            from: working_folder
-            to: source_folder
-            from_file_format: csv
-            schame:
-                messageID: id
+
+steps:
+    transport:
+        uses: action_one
+        params:
+            source: source_folder
+            target: working_folder
+    process:
+        depends_on: transport
+        uses: action_one
+        params:
+            source: working_folder
+            target: source_folder
+            source_file_format: csv
