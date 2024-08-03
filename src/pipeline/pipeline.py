@@ -1,6 +1,5 @@
 from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from concurrent.futures import  ThreadPoolExecutor
 from typing import Any, Self
 from typing import Callable
 from typing import Optional
@@ -9,50 +8,70 @@ from typing import Optional
 from src.actions.base import ActionFactory
 from src.contexts.pipeline import AppContext, ExecutionContext, Node
 from src.contexts.pipeline import JobReport
-from src.contexts.pipeline import PipelineContext
 from src.pipeline.errors import ErrorHandler
 from src.pipeline.errors import SimpleErrorHandler
+from src.pipeline.log import JobLogHandler
 
 TNextStep = Callable[[Any], None]
 
 
 class PipelineError(Exception):
     """PipelineError to handle errors in pipeline"""
-
     pass
 
 
 
 class PipelineCursor(ExecutionContext):
-    def __init__(self, dag_graph:dict, task_dependencies: dict, error_handler) -> None:
+    def __init__(
+        self, 
+        dag_graph:dict, 
+        task_dependencies: dict, 
+        error_handler,
+        log_handler,
+    ) -> None:
         super().__init__()
         self.graph = dag_graph
         self.deps = task_dependencies
         self.error_handler = error_handler
+        self.log_handler = log_handler
     
     def get_node(self, step_name:str):
         context = self.steps.get(step_name)
         context.update({"name": step_name})
         return Node(name=step_name, context=context)
     
-    def execute(self, executor: ThreadPoolExecutor, step_name:str, partition_value: str):
+    # TODO: Add step for checking source and destination before proceding i.e connection, empty source
+    def execute(
+        self,
+        executor: "ThreadPoolExecutor",
+        step_name: str,
+        partition_value: str,
+    ):
         node = self.get_node(step_name)
-        action_name = node.context.get('uses', None)
+        action_name = node.context.get("uses", None)
 
-        if action_name is None:
-            raise TypeError(f"Action '{action_name}' does not exist in the registry")
-
-        action = ActionFactory.setup_action(action_name)
-        params = node.context.get('params', {})
-        params.update({
-                'partition_value': partition_value,
-                'name': step_name,
-            })
-
-        if params:
-            return executor.submit(action, **params)
-        else:
-            return executor.submit(action)
+        if action_name:
+            action = ActionFactory.setup_action(action_name)
+            params = node.context.get("params", {})
+            params.update(
+                {
+                    "partition_value": partition_value,
+                    "name": step_name,
+                }
+            )
+            
+            self.log_handler.create(step_name, params) # create new record in log table
+            self.log_handler.start()
+            try:
+                if params: 
+                    future = executor.submit(action, **params)
+                else:
+                    future = executor.submit(action)
+                self.log_handler.success()
+                return future
+            except Exception as error:
+                self.log_handler.failed(error)
+                self.error_handler(error, params)
 
 
     def __call__(self, partition_value:str) -> list[int]:
@@ -113,7 +132,7 @@ class Pipeline(AppContext):
         self.graph: dict = defaultdict(list)
         self.deps: dict = defaultdict(int)
     
-        
+    # TODO: Would this work if I want to specify the yaml config to use?
     def generate_dag(self) -> Self:
         
         for name, context in self.execution_context.steps.items():
@@ -136,8 +155,7 @@ class Pipeline(AppContext):
         bool
             True if the edge is added successfully, False if the edge would create a cycle.
         """
-        deps = self.graph[step]
-        print(step, deps)
+        _ = self.graph[step]
         if depends_on is None:
             return True
         
@@ -194,7 +212,8 @@ class Pipeline(AppContext):
     def run(
         self, 
         partition_value: str, 
-        error_handler: Optional[ErrorHandler] = None
+        error_handler: Optional[ErrorHandler] = None,
+        log_handler: Optional[JobLogHandler] = None
     ) -> None:
         self.declare(partition_value, self._start_job_report())
         
@@ -202,6 +221,7 @@ class Pipeline(AppContext):
             self.graph, 
             self.deps, 
             error_handler or SimpleErrorHandler(),
+            log_handler or self.log_handler, 
         )
         execute(partition_value)
     
@@ -262,22 +282,34 @@ class Pipeline(AppContext):
 
     def declare(self, partition_value: str, job_report: JobReport) -> None:
         """
-        Declare run information.
+        Declare pipeline configuration
 
         Args:
             partition_value (str): Partition value.
             job_report (JobReport): Job report.
         """
         print("*" * 100)
-        print("Configs initialized, starting ingestion")
+        print("Configs initialized, Starting ingestion")
+        print("Job Name: ", self.pipeline_context.job_name)
         print(
-            f"Ingestion timestamp: \
-            {job_report.start_ts.strftime(self.pipeline_context.ts_fmt)}"
+            f"Ingestion timestamp: {
+                job_report.start_ts.strftime(self.pipeline_context.ts_fmt)
+            }"
         )
         print("Partition Value: ", partition_value)
         # print(f"Log Path: {self.work_dir / self.log_file_name}")
+        self._get_log_handler()
         print("*" * 100)
+        
 
+    def _get_log_handler(self) -> None:
+        """
+        Connect log table.
+        """
+        self.log_handler = JobLogHandler("current_execution")
+        print("Log table connected")
+        
+        
     def _report_pipeline_run(self, job_report: JobReport) -> None:
         """
         Report pipeline job results

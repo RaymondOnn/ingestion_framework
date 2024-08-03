@@ -7,9 +7,9 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.13"
-dlt = {extras = ["duckdb"], version = "^0.4.12"}
-streamlit = "^1.35.0"
-duckdb = ">=0.6.1"
+python-dateutil = "^2.9.0.post0"
+duckdb = "^1.0.0"
+requests = "^2.32.3"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Callable, Type, Protocol
+from typing import Any, Callable, NoReturn, Type, Protocol
 
 
 class ActionNotFound(Exception):
@@ -51,7 +51,7 @@ class ActionFactory:
         return inner_wrapper
 
     @classmethod
-    def setup_action(cls, name: str) -> Callable[[Any], Any]:
+    def setup_action(cls, name: str) -> Callable[[Any], Any] | NoReturn:
         """
         Factory command to create the client.
 

@@ -2,3 +2,5 @@
 - Schema Contracts
 - Incremental Loading / Checkpointing
 - Schema Definition for normalize stage
+- Mode: Sequential / Parallel when there's branching
+- validation system

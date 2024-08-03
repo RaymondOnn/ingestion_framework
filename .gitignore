@@ -1,13 +1,7 @@
 # tasks.md
-/logs
-scrap.py
-src/docker/minio/data/
-src/docker/spark/jars/
-src/docker/kafka
-src/spark/logs
+
 .idea
-*.pex
-fraudTrain.csv
+
 
 # Created by https://www.toptal.com/developers/gitignore/api/venv,python,JupyterNotebooks,Pycharm,VisualStudioCode,macOS
 # Edit at https://www.toptal.com/developers/gitignore?templates=venv,python,JupyterNotebooks,Pycharm,VisualStudioCode,macOS

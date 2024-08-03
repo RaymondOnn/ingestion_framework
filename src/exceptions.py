@@ -22,6 +22,14 @@
 # 20. Invalid Pipeline Trace
 # 21. Invalid Pipeline Step Trace
 
+import logging
+import traceback
+
+def handle_exception(error: Exception, message: str, quiet: bool = False):
+    logging.error(traceback.format_exc().strip().splitlines()[-1])
+    logging.error(message)
+    if not quiet:
+        raise error
 
 class InvalidSourceError(Exception):
     """Custom exception class for invalid data source errors."""

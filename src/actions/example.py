@@ -1,10 +1,10 @@
-from datetime import datetime
+
 import time
 
-import pytz
 
 from src.clients.base import ClientFactory
 from src.actions.base import ActionFactory
+from src.pipeline.log import log
 
 
 def sleep(secs):
@@ -34,10 +34,10 @@ def get_clients(**kwargs):
     #     print("action one: Ending")
 
 @ActionFactory.register("action_one")
+@log
 def ActionTwo(**kwargs) -> None:
-    name = kwargs.get("name", None)
-    print(name, f"Starting at {datetime.now(tz=pytz.utc)}")
-    print("kwargs:", kwargs)
+    print("action one: Starting")
+    # print("kwargs:", kwargs)
     sleep(2)
     print("action one: Ending")
 
