@@ -1,7 +1,7 @@
 # tasks.md
 
 .idea
-
+*.duckdb
 
 # Created by https://www.toptal.com/developers/gitignore/api/venv,python,JupyterNotebooks,Pycharm,VisualStudioCode,macOS
 # Edit at https://www.toptal.com/developers/gitignore?templates=venv,python,JupyterNotebooks,Pycharm,VisualStudioCode,macOS
