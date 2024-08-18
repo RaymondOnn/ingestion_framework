@@ -1,12 +1,17 @@
 from pathlib import Path
 
-from src.clients.base import ClientBase
+from src.clients.base import Client
 from src.clients.base import ClientFactory
-from src.clients.base import InvalidSourceError
+from src.clients.base import SourceClientError
+
+# import watchdog
+
+# .set_active_path(partition_value):
+# exists() if source, mkdir() if target
 
 
 @ClientFactory.register("directory")
-class Directory(ClientBase):
+class Directory(Client):
     """
     A client for interacting with a directory in the file system.
     """
@@ -21,15 +26,17 @@ class Directory(ClientBase):
         """
 
         self.base_path = Path(kwargs.get("directory_path", None))
-        self.active_path = self.base_path / kwargs.get("partition_value", None)
-        self.partition_value = kwargs.get("partition_value", None)
 
+    def set_active_path(self, partition_value):
+        self.active_path = self.base_path / "partition_value"
+        self.partition_value = "partition_value"
         if not self.active_path.exists():
             if self.is_source:
-                raise InvalidSourceError(
+                raise SourceClientError(
                     f"Directory '{self.active_path}' does not exist."
                 )
             else:
+                print(f"Directory '{self.active_path}' not found. Creating...")
                 self.active_path.mkdir(parents=True)
 
     def get_path(self) -> Path:

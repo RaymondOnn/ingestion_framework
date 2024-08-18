@@ -1,9 +1,11 @@
 import os
 import platform
 from typing import Any
-from typing import Optional
+from typing import NoReturn
 
 import requests
+
+from src.clients.abstract import O365Client
 
 
 def ensure_directory_exists(file_path):
@@ -44,7 +46,7 @@ def get_long_path(path: str) -> str:
         return os.path.abspath(path)
 
 
-class Sharepoint:
+class Sharepoint(O365Client):
     """
     This class represents a client for interacting with SharePoint.
     It provides methods for authenticating with Microsoft Graph API,
@@ -52,60 +54,16 @@ class Sharepoint:
     and recursively downloading files from a folder and its subfolders.
     """
 
-    def __init__(
-        self,
-        tenant_id,
-        client_id,
-        client_secret,
-        resource_url,
-    ) -> None:
-        """
-        Initializes a Sharepoint client with the given tenant ID, client ID,
-        client secret, and resource URL.
+    def __init__(self, **kwargs) -> None:
 
-        Args:
-            tenant_id (str): The ID of the tenant.
-            client_id (str): The client ID.
-            client_secret (str): The client secret.
-            resource_url (str): The resource URL.
-        """
-        self.tenant_id = tenant_id
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.resource_url = resource_url
-        self.base_url = (
-            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+        tenant_id = kwargs.get("tenant_id", None)
+        client_id = kwargs.get("client_id", None)
+        client_secret = kwargs.get("client_secret", None)
+        super().__init__(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
         )
-        self.headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        self.access_token = (
-            self.get_access_token()
-        )  # Initialize and store the access token upon instantiation
-
-    def get_access_token(self) -> str:
-        """
-        Retrieves an access token from Microsoft's OAuth2 endpoint.
-        The access token is used to authenticate and authorize the application
-        for accessing Microsoft Graph API resources.
-
-        Returns:
-            str: The access token as a string. This token is used for
-                authentication in subsequent API requests.
-        """
-        # Body for the access token request
-        data = {
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "grant_type": "client_credentials",
-            "scope": self.resource_url + ".default",
-        }
-        response = requests.post(
-            self.base_url,
-            headers=self.headers,
-            data=data,
-        )
-        return response.json().get(
-            "access_token"
-        )  # Extract access token from the response
 
     def get_site_id(self, site_url) -> str:
         """
@@ -143,7 +101,7 @@ class Sharepoint:
             ({"id": drive["id"], "name": drive["name"]}) for drive in drives
         ]  # noqa
 
-    def get_folder_id(self, site_id, drive_id, folder_path) -> Optional[str]:
+    def get_folder_id(self, site_id, drive_id, folder_path) -> str | NoReturn:
         """
         Retrieves the folder ID for a given folder path within a site
         and drive.
@@ -178,7 +136,7 @@ class Sharepoint:
                     break
             else:
                 # If the folder was not found, return None
-                return None
+                raise Exception(f"Folder {folder_name} not found.")
 
         # Return the ID of the final folder in the path
         return current_folder_id
@@ -239,36 +197,6 @@ class Sharepoint:
                 )
             folder_contents_url = folder_contents.get("@odata.nextLink")
         return items_list
-
-    def download_file(self, download_url, local_path, file_name) -> None:
-        """
-        Downloads a file from a given URL and saves it to a specified
-        local path.
-
-        Parameters:
-            download_url (str): The URL from which the file will be downloaded.
-            local_path (str): The local path where the file will be saved.
-            file_name (str): The name of the file to be saved.
-
-        Returns:
-            None
-        """
-        headers = {"Authorization": f"Bearer {self.access_token}"}
-        response = requests.get(download_url, headers=headers)
-        if response.status_code == 200:
-            full_path = os.path.join(local_path, file_name)
-            full_path = get_long_path(
-                full_path
-            )  # Apply the long path fix conditionally based on the OS
-            ensure_directory_exists(full_path)
-            with open(full_path, "wb") as file:
-                file.write(response.content)
-            # print(f"File downloaded: {full_path}")
-        else:
-            print(
-                f"Failed to download {file_name}: \
-                    {response.status_code} - {response.reason}"
-            )
 
     def download_folder_contents(
         self, site_id, drive_id, folder_id, local_folder_path, level=0
