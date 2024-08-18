@@ -1,33 +1,72 @@
-
 # TODO: How to mark failed if dependent task fails
 # TODO: Add in more info about the job
-
 import functools
-import logging
+import os
+import sys
 import time
+import traceback
 import uuid
-from enum import Enum
-from typing import Any, Optional
 from datetime import datetime
+from enum import Enum
+from typing import Any
 
 import duckdb
 from dateutil.relativedelta import relativedelta
+from loguru import logger as lg
 
 from src.pipeline.database import Database
 
-logging.basicConfig(level=logging.INFO)
+
+logger_format = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+    "<level>{level: <8}</level> | "
+    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+    "<level>{message}</level>"
+)
+
+
+def get_logger():
+    """
+    Create and configure a Logger instance from loguru.
+
+    Returns:
+        Logger: A Logger instance with the configured settings.
+    """
+    lg.remove()
+    # Add a new handler that logs to sys.stderr
+    lg.add(
+        sys.stderr,
+        # logger level
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        # logger format
+        format=logger_format,
+        # Colorize the output
+        colorize=True,
+        # Do not serialize the log records
+        serialize=False,
+    )
+    print(lg)
+    return lg
+
+
+logger = get_logger()
+
 
 def set_ttl_time(years=1):
     timestamp = datetime.timestamp(datetime.now() + relativedelta(years=years))
     return datetime.fromtimestamp(timestamp)
 
+
+def handle_exception(error: Exception, message: str, quiet: bool = False):
+    logger.error(traceback.format_exc().strip().splitlines()[-1])
+    logger.error(message)
+    if not quiet:
+        raise error
+
+
 # TODO: add rows for each step at the start of the job run
 class LogTable:
-    def __init__(
-        self,
-        db_conn,
-        log_table_name: str
-        ) -> None:
+    def __init__(self, db_conn, log_table_name: str) -> None:
 
         self.changes: dict[str, Any] = {}
         self.table = log_table_name  # "current_execution"
@@ -41,31 +80,34 @@ class LogTable:
         """Create table if not exists"""
         query = f"""
             CREATE TABLE IF NOT EXISTS {self.table} (
-                run_id VARCHAR 
-                , job_name VARCHAR 
-                , step_name VARCHAR 
-                , status VARCHAR 
-                , start_ts TIMESTAMP 
-                , end_ts TIMESTAMP 
-                , partition_value VARCHAR 
-                , params VARCHAR 
-                , error_message VARCHAR 
-                , log_path VARCHAR 
+                run_id VARCHAR
+                , job_name VARCHAR
+                , step_name VARCHAR
+                , status VARCHAR
+                , start_ts TIMESTAMP
+                , end_ts TIMESTAMP
+                , partition_value VARCHAR
+                , params VARCHAR
+                , error_message VARCHAR
+                , log_path VARCHAR
                 , ttl TIMESTAMP
-                , created_by VARCHAR DEFAULT 'system' 
+                , created_by VARCHAR DEFAULT 'system'
                 , created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                , last_updated_at TIMESTAMP 
+                , last_updated_at TIMESTAMP
             )
         """
         self.conn.execute(query)
         return True
-        
+
     def get(self, run_id: str) -> tuple[int]:
         query = f"SELECT COUNT(1) FROM {self.table} WHERE run_id = '{run_id}'"
         self.conn.execute(query)
         return self.conn.fetchone()
-        
-    def save(self, run_id: str, ) -> bool:
+
+    def save(
+        self,
+        run_id: str,
+    ) -> bool:
         """save to database table"""
         values = list(self.changes.values())
         if self.get(run_id)[0]:
@@ -73,12 +115,12 @@ class LogTable:
             set_str = ", ".join([f"{key} = ?" for key in self.changes.keys()])
             values.extend([run_id])
             query = f"UPDATE {self.table} SET {set_str} WHERE run_id = ?"
-        else: 
-            
-            col_str = ', '.join(self.changes.keys())
-            value_str = ','.join(["?"]*len(values))
+        else:
+
+            col_str = ", ".join(self.changes.keys())
+            value_str = ",".join(["?"] * len(values))
             query = f"INSERT INTO {self.table}({col_str}) VALUES ({value_str})"
-        
+
         self.conn.execute(query, values)
         self.changes.clear()
         return True
@@ -102,12 +144,13 @@ class LogTable:
     # TODO: empty current_execution table into execution_log table
     def clear(self):
         raise NotImplementedError
-    
+
     def set_attr(self, attribute: str, value: Any) -> bool:
         """track new changes to the table"""
         setattr(self, attribute, value)
         self.changes.update({attribute: value})
         return True
+
 
 class Status(Enum):
     queued = "QUEUED"
@@ -123,16 +166,16 @@ class Status(Enum):
     def __str__(self) -> str:
         return str(self.value)
 
+
 class JobLogHandler:
     def __init__(self, log_table_name: str):
         self.table_name = log_table_name
         self.log_table = LogTable(
-            db_conn=Database.duckdb.value.conn, 
-            log_table_name=log_table_name
+            db_conn=Database.duckdb.value.conn, log_table_name=log_table_name
         )
         self.run_id = ""
 
-    def create(self, name:str, params: dict, **kwargs):
+    def create(self, name: str, params: dict, **kwargs):
         # print("inside create task ", name)
         self.run_id = f"{name}#${uuid.uuid4().__str__()}"
         now = str(datetime.now())
@@ -144,7 +187,7 @@ class JobLogHandler:
         self.log_table.set_attr("last_updated_at", now)
         self.log_table.set_attr("params", params)
         self.log_table.save(self.run_id)
-    
+
     def failed(self, error_message="Error") -> bool:
         # print("inside failed task ", self.run_id)
         try:
@@ -161,7 +204,7 @@ class JobLogHandler:
 
     def success(self):
         # print("inside success task ", self.run_id)
-        try: 
+        try:
             now = str(datetime.now())
             self.log_table.set_attr("status", str(Status.success))
             self.log_table.set_attr("end_ts", now)
@@ -190,6 +233,7 @@ class JobLogHandler:
         except Exception:
             return False
 
+
 def log(func):
     """
     Decorator that logs the start and end of a function execution.
@@ -214,21 +258,24 @@ def log(func):
             The result of the decorated function.
         """
         # Log the start of the function execution
-        step = kwargs.get("name", func.__name__) 
-        start = time.perf_counter()
-        logging.info(f"Executing '{step}' at {datetime.fromtimestamp(start)} with args {args} and kwargs {kwargs}")
-        
+        step = kwargs.get("name", func.__name__)
+        start = time.time()
+        logger.info(f"Executing '{step}' at {datetime.fromtimestamp(start)}")
+        # logger.info(f"with kwargs {kwargs}")
+
         try:
             # Call the decorated function
             result = func(*args, **kwargs)
 
             # Log the end of the function execution
-            end = time.perf_counter()
+            end = time.time()
             duration = f"{end - start:.4f}"
-            logging.info(f"Finished executing '{step}'. Took {duration} seconds")
-            
+            logger.success(
+                f"Finished executing '{step}'. Took {duration} seconds",
+            )
+
             return result
-        
+
         except Exception as e:
             response = {"status": -1, "error": {"message": str(e)}}
             raise Exception(response)
@@ -237,5 +284,3 @@ def log(func):
             pass
 
     return wrapper
-
-        
