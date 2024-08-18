@@ -1,15 +1,17 @@
 import logging
-from typing import Any, Callable, NoReturn, Type, Protocol
+from typing import Any
+from typing import Callable
+from typing import NoReturn
+from typing import Protocol
 
 
 class ActionNotFound(Exception):
     pass
 
+
 class Action(Protocol):
-    
     def __call__(self):
         pass
-
 
 
 class ActionFactory:
@@ -29,7 +31,9 @@ class ActionFactory:
             The Executor class itself.
         """
 
-        def inner_wrapper(wrapped_class: Callable[[Any], Any]) -> Callable[[Any], Any]:
+        def inner_wrapper(
+            wrapped_class: Callable[[Any], Any],
+        ) -> Callable[[Any], Any]:
             """
             Registers the client class in the registry under the given name.
 
