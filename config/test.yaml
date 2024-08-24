@@ -1,0 +1,30 @@
+name: test pipeline
+timestamp_format: "%Y-%m-%d %H:%M:%S"
+locations:
+  source_folder:
+    type: directory
+    directory_path: /Users/main/Documents/Code/Github/ingestion_framework
+
+  working_folder:
+    type: snowflake_landing_zone
+    directory_path: /Users/main/Documents/Code/Github/ingestion_framework
+
+steps:
+  transport:
+    uses: action_one
+    params:
+      secs: 3
+    outputs:
+      test1: test.txt
+
+  process:
+    depends_on: transport
+    uses: action_two
+    inputs:
+      transport: test1
+    params:
+      secs: 4
+
+
+  # load:
+  #   depends_on: [transport, process]

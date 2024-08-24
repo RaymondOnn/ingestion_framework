@@ -1,22 +1,53 @@
-from collections import defaultdict
-from collections import deque
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from datetime import timezone
-from typing import NoReturn
-from typing import Optional
-from typing import Self
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, NoReturn, Optional, Self
+
+import yaml
 
 from src.actions.base import ActionFactory
-from src.contexts.pipeline import AppContext
-from src.contexts.pipeline import ExecutionContext
-from src.contexts.pipeline import JobReport
-from src.contexts.pipeline import Node
-from src.pipeline.errors import ErrorHandler
-from src.pipeline.errors import SimpleErrorHandler
-from src.pipeline.log import JobLogHandler
-from src.pipeline.log import logger
+from src.clients.base import ClientFactory
+from src.contexts.pipeline import (
+    ClientContext,
+    JobContext,
+    JobReport,
+    Node,
+    WorkflowContext,
+)
+from src.contexts.settings import DEFAULT_CONFIG_FILE_PATH
+from src.exceptions import InvalidConfigError
+from src.pipeline.errors import ErrorHandler, SimpleErrorHandler
+from src.pipeline.log import JobLogHandler, logger
 from src.pipeline.workdir import WorkingDirectory
+
+
+def is_yaml_file(file_path: str) -> bool:
+    result = False
+    try:
+        # Check that specified config file exists
+        assert Path(file_path).exists()
+        assert Path(file_path).is_file()
+
+        # Check that specified config file is a yaml file
+        assert Path(file_path).suffix == ".yaml"
+        result = True
+    except AssertionError:
+        msg = f"Config file is not a yaml file: {file_path}"
+        logger.error(msg)
+        raise InvalidConfigError(msg)
+    return result
+
+
+def load_yaml(file_path: str) -> dict:
+    logger.info(f"Loading config file: {file_path}")
+    try:
+        with open(file_path, "r") as f:
+            return yaml.safe_load(f)  # json.load(f)
+    except yaml.YAMLError as err:
+        raise InvalidConfigError(f"Error loading config file: {err}")
+    except FileNotFoundError as err:
+        raise InvalidConfigError(f"Config file not found: {err}")
 
 
 class PipelineError(Exception):
@@ -25,24 +56,27 @@ class PipelineError(Exception):
     pass
 
 
-class PipelineCursor(ExecutionContext):
+class PipelineCursor:
     def __init__(
         self,
         dag_graph: dict,
         task_dependencies: dict,
-        error_handler,
+        workflow_ctx: WorkflowContext,
+        client_ctx: ClientContext,
+        error_handler: ErrorHandler,
         log_handler: JobLogHandler,
         working_directory: WorkingDirectory,
     ) -> None:
-        super().__init__()
         self.graph = dag_graph
         self.deps = task_dependencies
+        self.clients = client_ctx
+        self.steps = workflow_ctx.steps
         self.error_handler = error_handler
         self.log_handler = log_handler
         self.workdir = working_directory
 
     def get_node(self, step_name: str):
-        context = self.steps.get(step_name)
+        context = self.steps.get(step_name, {})
         params = context.pop("params", {})
         context.update({"name": step_name})
         return Node(name=step_name, context=context, params=params)
@@ -50,6 +84,14 @@ class PipelineCursor(ExecutionContext):
     def _validate_node(self, step_name: str):
         """Validate source and target before proceeding"""
         raise NotImplementedError
+
+    def _get_source_client(self, source_name: str, partition_value: str):
+        factory = ClientFactory(self.clients, partition_value)
+        return factory.get_source(source_name)
+
+    def _get_target_client(self, target_name: str, partition_value: str):
+        factory = ClientFactory(self.clients, partition_value)
+        return factory.get_target(target_name)
 
     # TODO: Add step for checking source and destination before
     # TODO: Check for starting conditions before starting
@@ -62,10 +104,16 @@ class PipelineCursor(ExecutionContext):
     ):
         node = self.get_node(step_name)
         action_name = node.context.get("uses", None)
+        if action_name is None:
+            msg = f"Unable to get value from key 'uses' for step '{step_name}':{action_name}"
+            logger.error(msg)
+            raise PipelineError(msg)
 
         if action_name:
             action = ActionFactory.setup_action(action_name)
             params = node.params
+
+            # add additional info to params
             params.update(
                 {
                     "partition_value": partition_value,
@@ -74,11 +122,22 @@ class PipelineCursor(ExecutionContext):
                     "output_dir": str(self.workdir.output_dir),
                 }
             )
+
+            # swap source and target name to actual clients if any
+            if "source" in params:
+                params["source"] = self._get_source_client(
+                    params["source"], partition_value
+                )
+            if "target" in params:
+                params["target"] = self._get_target_client(
+                    params["target"], partition_value
+                )
             info = node.context | params
 
             # create new record in log table
             self.log_handler.create(step_name, params)
             self.log_handler.start()
+
             try:
                 future = executor.submit(action, **info)
                 self.log_handler.success()
@@ -112,11 +171,9 @@ class PipelineCursor(ExecutionContext):
         q = []
 
         with ThreadPoolExecutor() as executor:
-
             # Add all nodes with in-degree 0 to the queue
             for step_name in self.graph:
                 if deps[step_name] == 0:
-
                     # Add a tuple with node and its execution to the queue
                     q.append(
                         (
@@ -135,7 +192,6 @@ class PipelineCursor(ExecutionContext):
             # Keep sorting until the queue is empty
             while q:
                 for step_name, execution in q:
-
                     # If the execution is not done, continue the loop
                     if not execution.done():
                         continue
@@ -165,24 +221,36 @@ class PipelineCursor(ExecutionContext):
         return result
 
 
-class Pipeline(AppContext):
+class Pipeline:
     """Pipeline to execute steps in pipeline"""
 
-    def __init__(self) -> None:
+    def __init__(self, config_file: str | None = None) -> None:
         """
         Initializes a new empty graph.
         """
-        super().__init__()
         self.graph: dict = defaultdict(list)
         self.deps: dict = defaultdict(int)
 
-    # TODO: Would this work if I want to specify the yaml config to use?
-    def generate_dag(self) -> Self:
-        logger.info("Generating DAG...")
+        if config_file is None:
+            config_file = DEFAULT_CONFIG_FILE_PATH
 
-        for name, context in self.execution_context.steps.items():
+        if is_yaml_file(config_file):
+            cfg = load_yaml(config_file)
+            self.config_file = config_file
+
+        self.workflow_ctx = self._get_workflow_ctx(cfg)
+        self.client_ctx = self._get_client_ctx(cfg)
+        self.job_ctx = self._get_job_ctx(cfg)
+
+    # TODO: Would this work if I want to specify the yaml config to use?
+    @classmethod
+    def from_yaml(cls, config_file: str | None = None) -> Self:
+        return cls(config_file)
+
+    def generate_dag(self, steps: WorkflowContext) -> Self:
+        logger.info("Generating DAG from config file")
+        for name, context in steps.steps.items():
             self.add(name, context.get("depends_on", None))
-        logger.success("Generated DAG successfully")
         return self
 
     def add(self, step: str, depends_on: Optional[str] = None) -> bool:
@@ -221,9 +289,7 @@ class Pipeline(AppContext):
     ) -> bool | NoReturn:
         # Edge already exists or creates a cycle
         if depends_on == step:
-            logger.warning(
-                f"Edge already exists between {depends_on} and {step}"
-            )  # noqa
+            logger.warning(f"Edge already exists between {depends_on} and {step}")  # noqa
 
         if step in self.graph[depends_on]:
             raise PipelineError(
@@ -236,9 +302,7 @@ class Pipeline(AppContext):
         if cycle_exists:
             # If a cycle is created, remove the edge and return False
             self.graph[depends_on].remove(step)
-            error_msg = (
-                f"Illegal cycle detected between {depends_on} and {step}"  # noqa
-            )
+            error_msg = f"Illegal cycle detected between {depends_on} and {step}"  # noqa
             raise PipelineError(error_msg)
 
         # If no cycle is created, add the edge and update in-degree
@@ -288,15 +352,18 @@ class Pipeline(AppContext):
         log_handler: Optional[JobLogHandler] = None,
         working_directory: Optional[WorkingDirectory] = None,
     ) -> None:
+        print("*" * 100)
         self.declare(partition_value, self._start_job_report())
         self.setup()
-
+        print("*" * 100)
         execute = PipelineCursor(
-            self.graph,
-            self.deps,
-            error_handler or SimpleErrorHandler(),
-            log_handler or self.log_handler,
-            working_directory or self.workdir,
+            dag_graph=self.graph,
+            task_dependencies=self.deps,
+            workflow_ctx=self.workflow_ctx,
+            client_ctx=self.client_ctx,
+            error_handler=error_handler or SimpleErrorHandler(),
+            log_handler=log_handler or self.log_handler,
+            working_directory=working_directory or self.workdir,
         )
         execute(partition_value)
 
@@ -356,6 +423,35 @@ class Pipeline(AppContext):
         """
         return JobReport()
 
+    def _get_workflow_ctx(self, config_dict: dict) -> WorkflowContext | NoReturn:
+        try:
+            steps = config_dict.get("steps")
+            assert steps
+            return WorkflowContext(steps=steps)
+        except (KeyError, AssertionError):
+            msg = f"Key 'steps' not found in config: {self.config_file}"
+            logger.error(msg)
+            raise InvalidConfigError(msg)
+
+    def _get_job_ctx(self, config_dict: dict) -> JobContext:
+        labels = ["steps", "locations"]
+        for label in labels:
+            if label in config_dict:
+                config_dict.pop(label)
+
+        config_dict["ts_fmt"] = config_dict.pop("timestamp_format")
+        return JobContext(**config_dict)
+
+    def _get_client_ctx(self, config_dict: dict) -> ClientContext:
+        try:
+            clients = config_dict.get("locations")
+            assert clients
+            return ClientContext(clients=clients)
+        except (KeyError, AssertionError):
+            msg = "Client config not found"
+            logger.error(msg)
+            raise InvalidConfigError(msg)
+
     def declare(self, partition_value: str, job_report: JobReport) -> None:
         """
         Declare pipeline configuration
@@ -364,28 +460,28 @@ class Pipeline(AppContext):
             partition_value (str): Partition value.
             job_report (JobReport): Job report.
         """
-        print("*" * 100)
         logger.info("Configs initialized, Starting ingestion")
-        logger.info(f"Job Name: {self.pipeline_context.job_name}")
+        logger.info(f"Job Name: {self.job_ctx.name}")
         logger.info(
-            f"Ingestion timestamp: {job_report.start_ts.strftime(self.pipeline_context.ts_fmt)}"  # noqa
+            f"Ingestion timestamp: {job_report.start_ts.strftime(self.job_ctx.ts_fmt)}"  # noqa
         )  # noqa
         logger.info(f"Partition Value: {partition_value}")
-        # logger.info(f"Log Path: {self.work_dir / self.log_file_name}")
 
     def setup(self) -> None:
+        self.generate_dag(steps=self.workflow_ctx)
+
         # Start logger for job logs
         self.log_handler = JobLogHandler("current_execution")
         logger.success("Log table connected")
 
         # Create a temporary working directory
         dir_name = (
-            self.pipeline_context.job_name
+            self.job_ctx.name
             + "_"
             + datetime.now(timezone.utc).astimezone().strftime("%Y%m%d%H%M%S")
         )
         self.workdir = WorkingDirectory.create(directory_name=dir_name)
-        print("*" * 100)
+        logger.info(f"Log Path: {self.workdir.object /  self.job_ctx.log_file_name}")
 
     def conclude(self):
         logger.info("*" * 100)
@@ -413,9 +509,13 @@ class Pipeline(AppContext):
 
         print("*" * 100)
         print("Pipeline run completed")
-        print(f"Start time: {job_report.start_ts.strftime(self.ts_fmt)}")
-        print(f"End time: {job_report.end_ts.strftime(self.ts_fmt)}")
+        print(f"Start time: {job_report.start_ts.strftime(self.job_ctx.ts_fmt)}")
+        print(f"End time: {job_report.end_ts.strftime(self.job_ctx.ts_fmt)}")
         print(f"Duration: {job_duration}")
         print(f"Exit code: {job_report.exit_code}")
-        print(f"Log Path: {self.work_dir / self.log_file_name}")
+        print(f"Log Path: {self.workdir + self.job_ctx.log_file_name}")
         print("*" * 100)
+
+    @property
+    def clients(self) -> dict[str, Any]:
+        return self._clients

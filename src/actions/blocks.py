@@ -1,21 +1,19 @@
 from pathlib import Path
 
-from src.clients.base import ClientFactory
 from src.pipeline.workdir import Outputs
+from src.pipeline.log import logger
 
 # import parse
 
-
-def get_clients(kwargs):
-    c = ClientFactory(**kwargs)
-    return c.get_source(), c.get_sink()
 
 
 def get_files(
     directory_path: str, file_name: str = "", pattern: str = "*"
 ) -> list[str]:
+    path = Path(directory_path).joinpath(file_name)
+    logger.info(f"Getting files from '{path.absolute()}'")
     return [
-        str(p) for p in Path(directory_path).joinpath(file_name).glob(pattern)
+        str(p) for p in path.glob(pattern)
     ]  # noqa
 
 

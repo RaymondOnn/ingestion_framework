@@ -1,6 +1,7 @@
 # TODO: How to mark failed if dependent task fails
 # TODO: Add in more info about the job
 import functools
+import json
 import os
 import sys
 import time
@@ -175,6 +176,16 @@ class JobLogHandler:
         )
         self.run_id = ""
 
+    def stringify_params(self, params: dict) -> str:
+        try:
+            for k, v in params.items():
+                if isinstance(v, (dict, list)):
+                    params[k] = json.dumps(v)
+                else: 
+                    params[k] = str(v)
+        except Exception as e:
+            raise e
+    
     def create(self, name: str, params: dict, **kwargs):
         # print("inside create task ", name)
         self.run_id = f"{name}#${uuid.uuid4().__str__()}"
@@ -185,7 +196,7 @@ class JobLogHandler:
         self.log_table.set_attr("start_ts", now)
         self.log_table.set_attr("ttl", set_ttl_time())
         self.log_table.set_attr("last_updated_at", now)
-        self.log_table.set_attr("params", params)
+        self.log_table.set_attr("params", self.stringify_params(params))
         self.log_table.save(self.run_id)
 
     def failed(self, error_message="Error") -> bool:
@@ -260,7 +271,7 @@ def log(func):
         # Log the start of the function execution
         step = kwargs.get("name", func.__name__)
         start = time.time()
-        logger.info(f"Executing '{step}' at {datetime.fromtimestamp(start)}")
+        logger.info(f"Executing step '{step}' at {datetime.fromtimestamp(start)}")
         # logger.info(f"with kwargs {kwargs}")
 
         try:
@@ -271,7 +282,7 @@ def log(func):
             end = time.time()
             duration = f"{end - start:.4f}"
             logger.success(
-                f"Finished executing '{step}'. Took {duration} seconds",
+                f"Finished executing step '{step}'. Took {duration} seconds",
             )
 
             return result

@@ -1,10 +1,8 @@
 logging:
-  job_logs: 
+  job_logs:
     db_file: memory.duckdb
     table_name: current_execution
     ttl: 7
     created_by: 'system'
   task_logs:
     log_file: ./logs/app.log
-
-

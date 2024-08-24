@@ -1,11 +1,13 @@
-import logging
+
+from pprint import pprint
 from typing import Any
 from typing import Callable
 from typing import NoReturn
 from typing import Type
 
-from src.contexts.client import ClientContext
-from src.contexts.client import InvalidConfigError
+from src.contexts.pipeline import ClientContext
+from src.exceptions import InvalidConfigError
+from src.pipeline.log import logger
 
 
 class ClientNotFound(Exception):
@@ -32,8 +34,10 @@ class Client:
             + ")"
         )
 
+    def __str__(self) -> str:
+        return self.__repr__()
 
-class ClientFactory(ClientContext):
+class ClientFactory:
     """
     Factory class that creates the clients based on the configuration.
     """
@@ -41,17 +45,20 @@ class ClientFactory(ClientContext):
     registry: dict[str, Type[Client]] = {}
     """ Internal registry for available executors """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(
+        self,  
+        client_ctx: ClientContext,
+        partition_value: str, 
+        **kwargs: Any
+    ) -> None:
         """
         Initialize the factory with the context and task name.
 
         :param context: The context containing the configuration.
         :param task_name: The name of the task.
         """
-        super().__init__()
-        self.partition_value = kwargs.get("partition_value", None)
-        self.source_name = kwargs.get("source", None)
-        self.sink_name = kwargs.get("target", None)
+        self.client_ctx = client_ctx
+        self.partition_value = partition_value
 
     @classmethod
     def register(cls, name: str) -> Callable:
@@ -84,7 +91,7 @@ class ClientFactory(ClientContext):
         return inner_wrapper
 
     @classmethod
-    def create_client(cls, name: str, **kwargs: Any) -> Client | NoReturn:
+    def create_client(cls, type: str, **kwargs: Any) -> Client | NoReturn:
         """
         Factory command to create the client.
 
@@ -100,12 +107,12 @@ class ClientFactory(ClientContext):
         Returns:
             ClientBase: An instance of the client that is created
         """
-        if name not in cls.registry:
+        if type not in cls.registry:
             raise ClientNotFound(
-                f"Client '{name}' does not exist in the registry",
+                f"Client '{type}' does not exist in the registry",
             )
 
-        exec_class = cls.registry[name]
+        exec_class = cls.registry[type]
         client = exec_class(**kwargs)
         return client
 
@@ -118,17 +125,23 @@ class ClientFactory(ClientContext):
     #     """
     #     return self._client_types.get(client_type, None)
 
-    def get_config(self, client_name: str) -> dict[str, Any] | NoReturn:
-        if client_name not in self.config:
-            raise InvalidConfigError(
-                f"Client config '{client_name}' does not exist in the registry"
-            )
-
-        config = self.config.get(client_name)
-        config["partition_value"] = self.partition_value
+    @staticmethod
+    def get_client_config(
+        client_ctx: ClientContext,  name: str, partition_value: str
+    ) -> dict[str, Any] | NoReturn:
+        
+        client_dict = client_ctx.clients
+        if name not in client_dict:
+            msg = f"Client config '{name}' does not exist in the registry"
+            logger.error(msg)
+            raise InvalidConfigError(msg)
+            
+        config = client_dict.get(name, {})
+        config.update({"partition_value": partition_value})
         return config
+        
 
-    def get_source(self) -> Client | NoReturn:
+    def get_source(self, name: str) -> Client | NoReturn:
         """
         Get the source client based on the configuration.
 
@@ -136,26 +149,33 @@ class ClientFactory(ClientContext):
             The source client instance.
         """
         try:
-            config = self.get_config(self.source_name)
+            config = self.get_client_config(
+                self.client_ctx, name, self.partition_value,
+            )
             client_type = config.pop("type")
             client = self.create_client(client_type, **config)
-            client.is_source = True
+            client.is_source = True  #?: is it necessary?
             return client
         except Exception as e:
             raise e
 
-    def get_sink(self) -> Client:
+    def get_target(self, name) -> Client:
         """
-        Get the sink client based on the configuration.
+        Get the target client based on the configuration.
 
         Returns:
-            The sink client.
+            The target client.
         """
         try:
-            config = self.get_config(self.sink_name)
+            config = self.get_client_config(
+                self.client_ctx, name, self.partition_value,
+            )
             client_type = config.pop("type")
             client = self.create_client(client_type, **config)
             client.is_source = False
             return client
         except Exception as e:
             raise e
+    
+    def __repr__(self):
+        return f"{self.__class__.__name__}(partition_value={self.partition_value})"

@@ -1,0 +1,37 @@
+---
+services:
+  postgresdb:
+    container_name: postgresdb
+    image: postgres:16
+    profiles:
+      - db
+      - postgres
+    ports:
+      - 5432:5432
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    volumes:
+      -  ${PWD:-.}/src/docker/pg_init.sql:/docker-entrypoint-initdb.d/pg_init.sql
+
+  pgadmin:
+    container_name: pgadmin
+    image: dpage/pgadmin4
+    profiles:
+      - postgres
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-pgadmin4@pgadmin.org}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    # volumes:
+    #   - ${PWD:-.}/src/postgres/pgadmin:/var/lib/pgadmin
+    restart: unless-stopped

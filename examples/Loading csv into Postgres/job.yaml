@@ -1,0 +1,78 @@
+
+
+name: test pipeline
+timestamp_format: "%Y-%m-%d %H:%M:%S"
+retries: 3
+retry_delay_secs: 10
+timeout_secs: 60
+locations:
+  source_folder:
+    type: directory
+    directory_path: examples/Loading csv into Postgres/data
+
+  postgres:
+    type: postgres
+    user: postgres
+    password: postgres
+    server: postgresdb
+    port: 5432
+    database: postgres
+    schema: staging
+
+steps:
+  import:
+    uses: files.import
+    params:
+      source: source_folder
+
+  process:
+    depends_on: import
+    uses: load_to_database
+    params:
+      secs: 4
+      # sink: postgres
+      # source_file_ext: csv
+      # schema:
+      #   source_columns:
+      #   - source_name: sup_id
+      #     target_name: Supplier_ID
+      #     data_type: string
+      #     sql_transformation: CONCAT("SUP", '-', SUP_ID)
+      #   - source_name: name
+      #     target_name: Supplier_Name
+      #     date_type : string
+      #     sql_transformation: ""
+      #   - source_name : price
+      #     target_name : Purchase_Price
+      #     date_type : int
+      #     sql_transformation: ""
+      #   - source_name : prod_name
+      #     target_name : Product_Name
+      #     date_type : string
+      #     sql_transformation: ""
+      #   - source_name : quantity
+      #     target_name : Purchase_Quantity
+      #     date_type : int
+      #     sql_transformation: ""
+      #   - source_name : ""
+      #     target_name : Total_Cost
+      #     date_type : int
+      #     sql_transformation: "price * quantity"
+      # new_columns: 
+      #   - target_name : Product_ID
+      #     data_type : string
+      #     sql_transformation : |
+      #       MERGE INTO delta.`{temp_std_dp_path}` dest 
+      #         USING delta.`dbfs:/FileStore/project/Product` src 
+      #         ON dest.Product_Name = src.Product_Name 
+      #       WHEN MATCHED THEN UPDATE 
+      #         SET dest.Product_ID = src.Product_ID
+      # column_order: [
+      #     "Supplier_ID", 
+      #     "Supplier_Name", 
+      #     "Product_ID", 
+      #     "Product_Name", 
+      #     "Purchase_Price", 
+      #     "Purchase_Quantity", 
+      #     "Total_Cost"
+      #   ]
