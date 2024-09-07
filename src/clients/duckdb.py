@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from enum import Enum
+
 
 import duckdb
 
@@ -18,8 +18,3 @@ class DuckdbClient:
 
     def __exit__(self):
         self.conn.close()
-
-
-class Database(Enum):
-    duckdb = DuckdbClient(DuckdbConfig(db_file="memory.duckdb"))
-    snowflake = ""

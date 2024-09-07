@@ -1,20 +1,12 @@
+import re
+from datetime import datetime
 from pathlib import Path
 
+from src.actions.errors import ActionError
 from src.pipeline.workdir import Outputs
-from src.pipeline.log import logger
+from src.utils.log import logger
 
 # import parse
-
-
-
-def get_files(
-    directory_path: str, file_name: str = "", pattern: str = "*"
-) -> list[str]:
-    path = Path(directory_path).joinpath(file_name)
-    logger.info(f"Getting files from '{path.absolute()}'")
-    return [
-        str(p) for p in path.glob(pattern)
-    ]  # noqa
 
 
 def save_to_file(name, key, output_dir, outputs, data, **kwargs):

@@ -1,68 +1,29 @@
-# TODO: How to mark failed if dependent task fails
-# TODO: Add in more info about the job
-import functools
 import json
-import os
-import sys
-import time
-import traceback
 import uuid
 from datetime import datetime
 from enum import Enum
+from pprint import pprint
 from typing import Any
+from typing import NoReturn
 
 import duckdb
 from dateutil.relativedelta import relativedelta
-from loguru import logger as lg
-
-from src.pipeline.database import Database
 
 
-logger_format = (
-    "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-    "<level>{level: <8}</level> | "
-    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-    "<level>{message}</level>"
-)
-
-
-def get_logger():
-    """
-    Create and configure a Logger instance from loguru.
-
-    Returns:
-        Logger: A Logger instance with the configured settings.
-    """
-    lg.remove()
-    # Add a new handler that logs to sys.stderr
-    lg.add(
-        sys.stderr,
-        # logger level
-        level=os.getenv("LOG_LEVEL", "INFO"),
-        # logger format
-        format=logger_format,
-        # Colorize the output
-        colorize=True,
-        # Do not serialize the log records
-        serialize=False,
-    )
-    print(lg)
-    return lg
-
-
-logger = get_logger()
+from src.clients.duckdb import DuckdbClient
+from src.clients.duckdb import DuckdbConfig
 
 
 def set_ttl_time(years=1):
     timestamp = datetime.timestamp(datetime.now() + relativedelta(years=years))
     return datetime.fromtimestamp(timestamp)
 
+class JobLogsError(Exception):
+    pass
 
-def handle_exception(error: Exception, message: str, quiet: bool = False):
-    logger.error(traceback.format_exc().strip().splitlines()[-1])
-    logger.error(message)
-    if not quiet:
-        raise error
+class Database(Enum):
+    duckdb = DuckdbClient(DuckdbConfig(db_file="memory.duckdb"))
+    snowflake = ""
 
 
 # TODO: add rows for each step at the start of the job run
@@ -169,23 +130,28 @@ class Status(Enum):
 
 
 class JobLogHandler:
-    def __init__(self, log_table_name: str):
+    def __init__(self, log_table_name: str) -> None:
         self.table_name = log_table_name
         self.log_table = LogTable(
             db_conn=Database.duckdb.value.conn, log_table_name=log_table_name
         )
         self.run_id = ""
 
-    def stringify_params(self, params: dict) -> str:
+    @staticmethod
+    def stringify_params(params: dict[str, Any]) -> dict[str, Any] | NoReturn:
+
+        params_copy = {}
         try:
             for k, v in params.items():
                 if isinstance(v, (dict, list)):
-                    params[k] = json.dumps(v)
-                else: 
-                    params[k] = str(v)
+                    params_copy[k] = json.dumps(v)
+                else:
+                    params_copy[k] = str(v)
+            # pprint(params_copy)
+            return params_copy
         except Exception as e:
             raise e
-    
+
     def create(self, name: str, params: dict, **kwargs):
         # print("inside create task ", name)
         self.run_id = f"{name}#${uuid.uuid4().__str__()}"
@@ -243,55 +209,3 @@ class JobLogHandler:
             return True
         except Exception:
             return False
-
-
-def log(func):
-    """
-    Decorator that logs the start and end of a function execution.
-
-    Args:
-        func (function): The function to be decorated.
-
-    Returns:
-        function: The decorated function.
-    """
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        """
-        Wrapper function that logs the start and end of a function execution.
-
-        Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments.
-
-        Returns:
-            The result of the decorated function.
-        """
-        # Log the start of the function execution
-        step = kwargs.get("name", func.__name__)
-        start = time.time()
-        logger.info(f"Executing step '{step}' at {datetime.fromtimestamp(start)}")
-        # logger.info(f"with kwargs {kwargs}")
-
-        try:
-            # Call the decorated function
-            result = func(*args, **kwargs)
-
-            # Log the end of the function execution
-            end = time.time()
-            duration = f"{end - start:.4f}"
-            logger.success(
-                f"Finished executing step '{step}'. Took {duration} seconds",
-            )
-
-            return result
-
-        except Exception as e:
-            response = {"status": -1, "error": {"message": str(e)}}
-            raise Exception(response)
-        finally:
-            # task_instance.end()
-            pass
-
-    return wrapper

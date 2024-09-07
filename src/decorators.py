@@ -6,11 +6,18 @@ import time
 import traceback
 from concurrent.futures import as_completed
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from datetime import datetime
 from email.mime.text import MIMEText
 
 import psutil
+from monadic_error import Attempt
+from monadic_error import Failure
+from monadic_error import Success
 from psutil._common import bytes2human
+
+from src.actions.metrics import Metrics
+from src.utils.log import logger
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,14 +46,82 @@ def log_execution(func):
             The result of the decorated function.
         """
         # Log the start of the function execution
-        logging.info(f"Executing {func.__qualname__} at {datetime.now()}")
-
+        step = kwargs.get("name")
+        logging.info(
+            f"Executing {step} at {datetime.now()} with args {args} and kwargs {kwargs}"  # noqa
+        )
         # Call the decorated function
         result = func(*args, **kwargs)
 
         # Log the end of the function execution
         logging.info(f"Finished executing {func.__qualname__}")
         return result
+
+    return wrapper
+
+
+def log(func):
+    """
+    Decorator that logs the start and end of a function execution.
+
+    Args:
+        func (function): The function to be decorated.
+
+    Returns:
+        function: The decorated function.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        """
+        Wrapper function that logs the start and end of a function execution.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            The result of the decorated function.
+        """
+
+        # Log the start of the function execution
+        step = kwargs.get("name", func.__name__)
+        start_time = time.time()
+        logger.info(f"Executing step '{step}' at {datetime.fromtimestamp(start_time)}")
+        process = psutil.Process(os.getpid())
+        start_mem = process.memory_info().rss
+        # logger.info(f"with kwargs {kwargs}")
+
+        try:
+            # Call the decorated function
+            result = func(*args, **kwargs)
+
+            # Log the end of the function execution
+            end_time = time.time()
+            duration = f"{end_time - start_time:.4f}"
+
+            end_mem = process.memory_info().rss
+            mem_delta = bytes2human(end_mem - start_mem)
+            logger.success(
+                f"Finished executing step '{step}'. Took {duration} seconds and used {mem_delta} memory",
+            )
+
+            metrics = asdict(
+                Metrics(
+                    start_time=datetime.fromtimestamp(timestamp=start_time),
+                    end_time=datetime.fromtimestamp(timestamp=end_time),
+                    memory_used=mem_delta,
+                )
+            )
+            # Return the result
+            return Success(inner={"output": result, "metrics": metrics})
+
+        except Exception as e:
+            # response = {"status": -1, "error": {"message": str(e)}}
+            return Failure(e)
+        finally:
+            # task_instance.end()
+            pass
 
     return wrapper
 
