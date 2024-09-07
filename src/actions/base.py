@@ -4,14 +4,7 @@ from typing import Callable
 from typing import NoReturn
 from typing import Protocol
 
-
-class ActionNotFound(Exception):
-    pass
-
-
-class Action(Protocol):
-    def __call__(self):
-        pass
+from src.actions.errors import ActionNotFound
 
 
 class ActionFactory:

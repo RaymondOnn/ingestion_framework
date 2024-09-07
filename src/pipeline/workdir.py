@@ -9,8 +9,8 @@ from watchdog.events import FileSystemEvent
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from src.pipeline.log import logger
 from src.utils.classes import Singleton
+from src.utils.log import logger
 
 DEFAULT_PARENT_FOLDER = str(Path().cwd())
 
@@ -53,8 +53,12 @@ class FileEventHandler(FileSystemEventHandler):
 
     @staticmethod
     def on_any_event(event):
-        if all([event.event_type != "created", not event.is_directory]):
-            logger.info(f"File {event.event_type}: % s." % event.src_path)
+        path = Path(event.src_path).relative_to(Path().cwd())
+        if all([event.event_type not in ["created", "modified"]]):
+            logger.debug(f"File {event.event_type}: % s." % path)
+        elif all([event.event_type == "modified", not event.is_directory]):
+            pass
+            # logger.debug(f"File {event.event_type}: % s." % path)
 
     @staticmethod
     def on_created(event: FileSystemEvent) -> None:
@@ -62,7 +66,7 @@ class FileEventHandler(FileSystemEventHandler):
             ["outputs" in str(event.src_path).lower(), not event.is_directory]
         ):  # noqa
             # Event is created, you can process it now
-            logger.info(f"File created: {event.src_path}")
+            logger.debug(f"File created: {event.src_path}")
             # Outputs.log(task='step', key='key', value='text.txt')
 
 

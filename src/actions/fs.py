@@ -1,20 +1,23 @@
-
 import shutil
-from typing import Any
+from pathlib import Path
+
+from loguru import logger
 
 from src.actions.base import ActionFactory
-from src.actions.blocks import get_files
-from src.pipeline.log import log
-
-
-
+from src.actions.utils.fs import get_files
+from src.decorators import log
 
 
 @ActionFactory.register("files.import")
 @log
-def get_file_from_folder(source, work_dir, **kwargs) -> dict[str, Any]:
-    files = get_files(source.base_path)
+def get_file_from_folder(source, pattern, work_dir, **kwargs) -> None:
+    files = get_files(source.base_path, pattern)
+
+    counter = 0
     for file in files:
+        counter += 1
         shutil.copy(file, work_dir)
-    
-    return {"status": "success"}
+
+    logger.success(
+        f"Imported {counter} files into {Path(work_dir).relative_to(Path.cwd())}"
+    )
