@@ -1,53 +1,33 @@
-from collections import defaultdict, deque
+from collections import defaultdict
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
-from typing import Any, NoReturn, Optional, Self
+from pprint import pprint
+from typing import NoReturn
+from typing import Optional
+from typing import Self
 
-import yaml
+from monadic_error import Attempt
 
 from src.actions.base import ActionFactory
-from src.clients.base import ClientFactory
-from src.contexts.pipeline import (
-    ClientContext,
-    JobContext,
-    JobReport,
-    Node,
-    WorkflowContext,
-)
+from src.clients.factory import ClientFactory
+from src.config.app_defaults import WORKING_DIRECTORY
+from src.contexts.base import is_yaml_file
+from src.contexts.base import load_yaml
+from src.contexts.errors import InvalidConfigError
+from src.contexts.pipeline import ClientContext
+from src.contexts.pipeline import JobContext
+from src.contexts.pipeline import JobReport
+from src.contexts.pipeline import Node
+from src.contexts.pipeline import WorkflowContext
 from src.contexts.settings import DEFAULT_CONFIG_FILE_PATH
-from src.exceptions import InvalidConfigError
-from src.pipeline.errors import ErrorHandler, SimpleErrorHandler
-from src.pipeline.log import JobLogHandler, logger
+from src.pipeline.errors import ErrorHandler
+from src.pipeline.errors import SimpleErrorHandler
 from src.pipeline.workdir import WorkingDirectory
-
-
-def is_yaml_file(file_path: str) -> bool:
-    result = False
-    try:
-        # Check that specified config file exists
-        assert Path(file_path).exists()
-        assert Path(file_path).is_file()
-
-        # Check that specified config file is a yaml file
-        assert Path(file_path).suffix == ".yaml"
-        result = True
-    except AssertionError:
-        msg = f"Config file is not a yaml file: {file_path}"
-        logger.error(msg)
-        raise InvalidConfigError(msg)
-    return result
-
-
-def load_yaml(file_path: str) -> dict:
-    logger.info(f"Loading config file: {file_path}")
-    try:
-        with open(file_path, "r") as f:
-            return yaml.safe_load(f)  # json.load(f)
-    except yaml.YAMLError as err:
-        raise InvalidConfigError(f"Error loading config file: {err}")
-    except FileNotFoundError as err:
-        raise InvalidConfigError(f"Config file not found: {err}")
+from src.utils.log import JobLogHandler
+from src.utils.log import logger
 
 
 class PipelineError(Exception):
@@ -148,13 +128,18 @@ class PipelineCursor:
                 self.log_handler.failed(error)
                 self.error_handler(error, params)
 
-    def _process_result(self, result):
+    def _handle_result(self, result: Attempt):
         """
         Provides an opportunity to maintain information outside
         the execution of the pipeline
 
         """
-        pass
+        if result.is_failure():
+            print(result.unwrap_f_or(-1))
+        elif result.is_success():
+            pprint(result.unwrap_or(-1))
+        else:
+            print("unknown")
 
     def __call__(self, partition_value: str) -> list[int]:
         """
@@ -198,7 +183,7 @@ class PipelineCursor:
 
                     # Remove the executed node from the queue and
                     # add it to the result
-                    self._process_result(execution.result())
+                    self._handle_result(execution.result())
                     q.remove((step_name, execution))
                     result.append(step_name)
 
@@ -238,9 +223,9 @@ class Pipeline:
             cfg = load_yaml(config_file)
             self.config_file = config_file
 
-        self.workflow_ctx = self._get_workflow_ctx(cfg)
-        self.client_ctx = self._get_client_ctx(cfg)
-        self.job_ctx = self._get_job_ctx(cfg)
+        self.workflow_ctx = self._get_workflow_ctx(cfg, to_stdout=True)
+        self.client_ctx = self._get_client_ctx(cfg, to_stdout=True)
+        self.job_ctx = self._get_job_ctx(cfg, to_stdout=True)
 
     # TODO: Would this work if I want to specify the yaml config to use?
     @classmethod
@@ -289,7 +274,9 @@ class Pipeline:
     ) -> bool | NoReturn:
         # Edge already exists or creates a cycle
         if depends_on == step:
-            logger.warning(f"Edge already exists between {depends_on} and {step}")  # noqa
+            logger.warning(
+                f"Edge already exists between {depends_on} and {step}"
+            )  # noqa
 
         if step in self.graph[depends_on]:
             raise PipelineError(
@@ -302,7 +289,9 @@ class Pipeline:
         if cycle_exists:
             # If a cycle is created, remove the edge and return False
             self.graph[depends_on].remove(step)
-            error_msg = f"Illegal cycle detected between {depends_on} and {step}"  # noqa
+            error_msg = (
+                f"Illegal cycle detected between {depends_on} and {step}"  # noqa
+            )
             raise PipelineError(error_msg)
 
         # If no cycle is created, add the edge and update in-degree
@@ -423,29 +412,72 @@ class Pipeline:
         """
         return JobReport()
 
-    def _get_workflow_ctx(self, config_dict: dict) -> WorkflowContext | NoReturn:
+    # TODO: Shift to Context module
+    def _log_ctx(self, path: str, config_dict: dict) -> None:
+        start_idx = 0 if path != "" else 1
+        for k, v in config_dict.items():
+            if isinstance(v, dict):
+                self._log_ctx(path + "." + k, v)
+            # else:
+            elif isinstance(v, list):
+                for idx, item in enumerate(v):
+                    if isinstance(item, dict):
+                        self._log_ctx(f"{path}.{k}[{str(idx)}]", item)
+                    else:
+                        item_str = (
+                            item if str(item).isnumeric() else f"'{item}'"
+                        )
+                        logger.info(
+                            f"{path[start_idx:]}.{k}[{str(idx)}]={item_str}"
+                        )
+            else:
+                v_str = v if str(v).isnumeric() else f"'{v}'"
+                logger.info(f"{path[start_idx:]}.{k}={v_str}")
+
+    def _get_workflow_ctx(
+        self,
+        config_dict: dict,
+        to_stdout: bool = False,
+    ) -> WorkflowContext | NoReturn:
         try:
             steps = config_dict.get("steps")
             assert steps
+            if to_stdout:
+                self._log_ctx("steps", steps)
             return WorkflowContext(steps=steps)
         except (KeyError, AssertionError):
             msg = f"Key 'steps' not found in config: {self.config_file}"
             logger.error(msg)
             raise InvalidConfigError(msg)
 
-    def _get_job_ctx(self, config_dict: dict) -> JobContext:
+    def _get_job_ctx(
+        self,
+        config_dict: dict,
+        to_stdout: bool = False,
+    ) -> JobContext:
         labels = ["steps", "locations"]
         for label in labels:
             if label in config_dict:
                 config_dict.pop(label)
 
+        if to_stdout:
+            self._log_ctx("job", config_dict)
+
         config_dict["ts_fmt"] = config_dict.pop("timestamp_format")
         return JobContext(**config_dict)
 
-    def _get_client_ctx(self, config_dict: dict) -> ClientContext:
+    def _get_client_ctx(
+        self,
+        config_dict: dict,
+        to_stdout: bool = False,
+    ) -> ClientContext:
         try:
             clients = config_dict.get("locations")
             assert clients
+
+            if to_stdout:
+                self._log_ctx("clients", config_dict)
+
             return ClientContext(clients=clients)
         except (KeyError, AssertionError):
             msg = "Client config not found"
@@ -476,12 +508,20 @@ class Pipeline:
 
         # Create a temporary working directory
         dir_name = (
-            self.job_ctx.name
-            + "_"
-            + datetime.now(timezone.utc).astimezone().strftime("%Y%m%d%H%M%S")
+            Path(WORKING_DIRECTORY)
+            .joinpath(
+                self.job_ctx.name
+                + "_"
+                + datetime.now(timezone.utc)
+                .astimezone()
+                .strftime("%Y%m%d%H%M%S")
+            )
+            .__str__()
         )
         self.workdir = WorkingDirectory.create(directory_name=dir_name)
-        logger.info(f"Log Path: {self.workdir.object /  self.job_ctx.log_file_name}")
+        logger.info(
+            f"Log Path: {self.workdir.object /  self.job_ctx.log_file_name}"
+        )
 
     def conclude(self):
         logger.info("*" * 100)
@@ -500,8 +540,8 @@ class Pipeline:
         """
         job_report.log_end_time()
 
-        duration_secs = int(
-            (job_report.end_ts - job_report.start_ts).total_seconds(),
+        duration_secs = (
+            (job_report.end_ts - job_report.start_ts).total_seconds().__int__()
         )
         hours, remainder = divmod(duration_secs, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -509,13 +549,11 @@ class Pipeline:
 
         print("*" * 100)
         print("Pipeline run completed")
-        print(f"Start time: {job_report.start_ts.strftime(self.job_ctx.ts_fmt)}")
+        print(
+            f"Start time: {job_report.start_ts.strftime(self.job_ctx.ts_fmt)}"
+        )
         print(f"End time: {job_report.end_ts.strftime(self.job_ctx.ts_fmt)}")
         print(f"Duration: {job_duration}")
         print(f"Exit code: {job_report.exit_code}")
-        print(f"Log Path: {self.workdir + self.job_ctx.log_file_name}")
+        print(f"Log Path: {self.workdir.object / self.job_ctx.log_file_name}")
         print("*" * 100)
-
-    @property
-    def clients(self) -> dict[str, Any]:
-        return self._clients
