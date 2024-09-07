@@ -22,9 +22,8 @@
 # 20. Invalid Pipeline Trace
 # 21. Invalid Pipeline Step Trace
 import traceback
-from typing import Optional, Type
 
-from src.pipeline.log import logger
+from src.utils.log import logger
 
 
 def handle_exception(error: Exception, message: str, quiet: bool = False):
@@ -43,32 +42,3 @@ class InvalidSourceError(Exception):
 
     def __init__(self, message="Invalid data source error occurred."):
         super().__init__(message)
-
-
-class InvalidConfigError(Exception):
-    """Custom exception class for invalid config errors."""
-    def __init__(self, message) -> None:
-        super().__init__()
-        self.message = message
-
-class InvalidConfig(Exception):
-    def __init__(
-        self, message: str, exceptions: list[InvalidConfigError] = []
-    ) -> None:
-        """
-        Initializes the InvalidConfigError exception.
-
-        Args:
-            message (str): The error message.
-            exceptions (Optional[List[Exception]]): A list of exceptions
-                that caused this error. Defaults to None.
-        """
-
-        # Call the parent class (Exception) constructor
-        super().__init__()
-
-        # Set the error message
-        self.message = message
-
-        # Set the exceptions that caused this error
-        self.exceptions = exceptions

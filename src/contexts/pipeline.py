@@ -1,11 +1,15 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
 
-from src.exceptions import InvalidConfig, InvalidConfigError
-from src.pipeline.log import logger
+from src.contexts.errors import InvalidConfig
+from src.contexts.errors import InvalidConfigError
+
+# from src.utils.log import logger
 
 
 DEFAULT_THREAD_COUNT = 10
@@ -24,6 +28,7 @@ class Node:
     context: dict[str, Any]
     params: dict[str, Any]
 
+
 @dataclass
 class JobContext:
     name: str
@@ -34,13 +39,14 @@ class JobContext:
     # self.code_dir = Path(
     # cfg.get("code_directory"), DEFAULT_CODE_DIR
     # )
-    
+
     max_thread_count: int = field(default=DEFAULT_THREAD_COUNT)
     max_process_count: int = field(default=DEFAULT_PROCESS_COUNT)
     ts_fmt: str = field(default=DEFAULT_TS_FMT)
     date_fmt: str = field(default=DEFAULT_DATE_FMT)
     extras_cfg: dict = field(default_factory=dict)
     log_file_name: str = field(default=DEFAULT_LOG_FILE_NAME)
+
     def post_init(self, timestamp_format: str):
         try:
             self.ts_fmt = timestamp_format
@@ -51,7 +57,6 @@ class JobContext:
 
             logger.info("Invalid config. Unable to continue. Exiting...")
             raise SystemExit(1)
-
 
     def _validate(self):
         errors = []
@@ -73,7 +78,7 @@ class WorkflowContext:
 @dataclass(frozen=True)
 class ClientContext:
     clients: dict[str, Any] = field(default_factory=dict)
-    
+
     def post_init(self):
         try:
             self._validate()
@@ -84,10 +89,11 @@ class ClientContext:
             logger.info("Invalid config. Unable to continue. Exiting...")
             raise SystemExit(1)
 
-
     def _validate(self):
         if self.clients is None:
-            raise InvalidConfigError(message="ClientContext is required: {self.clients}")
+            raise InvalidConfigError(
+                message="ClientContext is required: {self.clients}"
+            )
 
 
 # class AppContext:
@@ -96,11 +102,14 @@ class ClientContext:
 
 
 class JobReport:
+    start_ts: datetime
+    end_ts: datetime
+    exit_code: int = -1
+    errors: list[Exception] = []
+
     def __init__(self) -> None:
-        self.start_ts: datetime = datetime.now()
-        self.end_ts: datetime | None = None
-        self.exit_code: int = -1
-        self.errors = None  # []
+        self.start_ts = datetime.now()
+        self.end_ts = datetime.now()
 
     def __str__(self) -> str:
         return f"Job started at {self.start_ts} and \
